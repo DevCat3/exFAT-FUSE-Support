@@ -132,7 +132,7 @@ jobs:
                     -I$SYSROOT_PATH/usr/include \
                     -I$SYSROOT_PATH/usr/include/aarch64-linux-android \
                     $FUSE_CFLAGS" \
-            LDFLAGS="--sysroot=$SYSROOT_PATH -static -L$FUSE_PREFIX/lib"
+            LDFLAGS="--sysroot=$SYSROOT_PATH -static -L$FUSE_PREFIX/lib -llog"
 
           make -j$(nproc)
           make install
