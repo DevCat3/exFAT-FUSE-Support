@@ -125,14 +125,13 @@ jobs:
           ./configure \
             --host="$TARGET" \
             --prefix="$PWD/../exfat-install" \
-            CC="$CC_CROSS" \
+            CC="$CC_CROSS --sysroot=$SYSROOT_PATH" \
             AR="$AR_CROSS" \
             CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
-                    --sysroot=$SYSROOT_PATH \
                     -I$SYSROOT_PATH/usr/include \
                     -I$SYSROOT_PATH/usr/include/aarch64-linux-android \
                     $FUSE_CFLAGS" \
-            LDFLAGS="--sysroot=$SYSROOT_PATH -static -L$FUSE_PREFIX/lib -llog"
+            LDFLAGS="-static -L$FUSE_PREFIX/lib -llog"
 
           make -j$(nproc)
           make install
