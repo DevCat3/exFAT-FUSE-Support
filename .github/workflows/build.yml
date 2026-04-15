@@ -54,6 +54,18 @@ jobs:
           tar -xzf fuse.tar.gz
           cd fuse-$FUSE_VERSION
 
+          # Patch: Android bionic does not support pthread cancellation.
+          # Stub out pthread_cancel and pthread_setcancelstate with no-ops.
+          sed -i \
+            -e 's/pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,  *NULL);/(void)0;/g' \
+            -e 's/pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, *NULL);/(void)0;/g' \
+            -e 's/pthread_cancel(w->thread_id);/(void)0;/g' \
+            lib/fuse_loop_mt.c
+
+          sed -i \
+            -e 's/pthread_cancel(f->prune_thread);/(void)0;/g' \
+            lib/fuse.c
+
           # Use the existing configure script — do NOT run autoreconf on libfuse 2.9.9
           ./configure \
             --host="$TARGET" \
@@ -65,6 +77,7 @@ jobs:
             CC="$CC" \
             AR="$AR" \
             CFLAGS="-D__ANDROID__ -D_FILE_OFFSET_BITS=64 -Os \
+                    -Wno-implicit-function-declaration \
                     --sysroot=$SYSROOT \
                     -I$SYSROOT/usr/include \
                     -I$SYSROOT/usr/include/aarch64-linux-android" \
