@@ -17,7 +17,6 @@ env:
   FUSE_VERSION: 2.9.9
   FUSE_URL: https://github.com/libfuse/libfuse/releases/download/fuse-2.9.9/fuse-2.9.9.tar.gz
   API_LEVEL: 21
-  ABI: arm64-v8a
   TARGET: aarch64-linux-android
 
 jobs:
@@ -34,36 +33,31 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             autoconf automake libtool pkg-config \
-            curl unzip zip
+            gettext curl unzip zip
 
       - name: Download & setup NDK ${{ env.NDK_VERSION }}
         run: |
-          echo "→ Downloading NDK..."
           curl -fsSL "$NDK_URL" -o ndk.zip
           unzip -q ndk.zip
-          echo "NDK_ROOT=$PWD/android-ndk-$NDK_VERSION" >> $GITHUB_ENV
-          echo "TOOLCHAIN=$PWD/android-ndk-$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+          echo "NDK_ROOT=$PWD/android-ndk-$NDK_VERSION"                                          >> $GITHUB_ENV
+          echo "TOOLCHAIN=$PWD/android-ndk-$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64"  >> $GITHUB_ENV
 
       - name: Build libfuse static (arm64)
         run: |
           set -e
           CC="$TOOLCHAIN/bin/${TARGET}${API_LEVEL}-clang"
           AR="$TOOLCHAIN/bin/llvm-ar"
-          STRIP="$TOOLCHAIN/bin/llvm-strip"
           SYSROOT="$TOOLCHAIN/sysroot"
+          PREFIX="$PWD/fuse-install"
 
-          echo "→ Downloading libfuse $FUSE_VERSION..."
           curl -fsSL "$FUSE_URL" -o fuse.tar.gz
           tar -xzf fuse.tar.gz
           cd fuse-$FUSE_VERSION
 
-          sed -i '/^SUBDIRS/s/util//' Makefile.am 2>/dev/null || true
-
-          autoreconf -fi
-
+          # Use the existing configure script — do NOT run autoreconf on libfuse 2.9.9
           ./configure \
             --host="$TARGET" \
-            --prefix="$PWD/../fuse-install" \
+            --prefix="$PREFIX" \
             --disable-shared \
             --enable-static \
             --disable-util \
@@ -76,15 +70,16 @@ jobs:
                     -I$SYSROOT/usr/include/aarch64-linux-android" \
             LDFLAGS="--sysroot=$SYSROOT -static-libgcc"
 
-          make -j$(nproc) install
+          make -j$(nproc)
+          make install
 
-          echo "FUSE_CFLAGS=-I$PWD/../fuse-install/include" >> $GITHUB_ENV
-          echo "FUSE_LIBS=-L$PWD/../fuse-install/lib -lfuse -lpthread" >> $GITHUB_ENV
-          echo "FUSE_INSTALL=$PWD/../fuse-install" >> $GITHUB_ENV
-          echo "CC_ANDROID=$CC" >> $GITHUB_ENV
-          echo "AR_ANDROID=$AR" >> $GITHUB_ENV
-          echo "STRIP_ANDROID=$STRIP" >> $GITHUB_ENV
-          echo "SYSROOT_ANDROID=$SYSROOT" >> $GITHUB_ENV
+          echo "FUSE_CFLAGS=-I$PREFIX/include"          >> $GITHUB_ENV
+          echo "FUSE_LIBS=-L$PREFIX/lib -lfuse -lpthread" >> $GITHUB_ENV
+          echo "FUSE_PREFIX=$PREFIX"                     >> $GITHUB_ENV
+          echo "CC_CROSS=$CC"                            >> $GITHUB_ENV
+          echo "AR_CROSS=$AR"                            >> $GITHUB_ENV
+          echo "STRIP_CROSS=$TOOLCHAIN/bin/llvm-strip"  >> $GITHUB_ENV
+          echo "SYSROOT_PATH=$SYSROOT"                  >> $GITHUB_ENV
 
       - name: Build exFAT (arm64)
         run: |
@@ -93,64 +88,54 @@ jobs:
 
           autoreconf --install
 
-          mkdir -p "$PWD/../fake-pkgconfig"
-          cat > "$PWD/../fake-pkgconfig/pkg-config" << 'EOF'
+          # Fake pkg-config so autoconf resolves libfuse to our static build
+          mkdir -p "$PWD/../fake-pc"
+          cat > "$PWD/../fake-pc/pkg-config" << 'PKGEOF'
           #!/bin/bash
           case "$*" in
-            *--cflags*fuse*) echo "$FUSE_CFLAGS" ;;
-            *--libs*fuse*)   echo "$FUSE_LIBS" ;;
+            *--cflags*fuse3*) exit 1 ;;
             *--exists*fuse3*) exit 1 ;;
+            *--cflags*fuse*)  echo "$FUSE_CFLAGS" ;;
+            *--libs*fuse*)    echo "$FUSE_LIBS" ;;
             *--exists*fuse*)  exit 0 ;;
-            *) pkg-config.real "$@" ;;
+            *)                /usr/bin/pkg-config "$@" ;;
           esac
-          EOF
-          chmod +x "$PWD/../fake-pkgconfig/pkg-config"
-          export PKG_CONFIG="$PWD/../fake-pkgconfig/pkg-config"
-
+          PKGEOF
+          chmod +x "$PWD/../fake-pc/pkg-config"
+          export PKG_CONFIG="$PWD/../fake-pc/pkg-config"
           export FUSE2_CFLAGS="$FUSE_CFLAGS"
           export FUSE2_LIBS="$FUSE_LIBS"
 
           ./configure \
             --host="$TARGET" \
             --prefix="$PWD/../exfat-install" \
-            CC="$CC_ANDROID" \
-            AR="$AR_ANDROID" \
+            CC="$CC_CROSS" \
+            AR="$AR_CROSS" \
             CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
-                    --sysroot=$SYSROOT_ANDROID \
-                    -I$SYSROOT_ANDROID/usr/include \
-                    -I$SYSROOT_ANDROID/usr/include/aarch64-linux-android \
+                    --sysroot=$SYSROOT_PATH \
+                    -I$SYSROOT_PATH/usr/include \
+                    -I$SYSROOT_PATH/usr/include/aarch64-linux-android \
                     $FUSE_CFLAGS" \
-            LDFLAGS="--sysroot=$SYSROOT_ANDROID -static \
-                     -L$FUSE_INSTALL/lib"
+            LDFLAGS="--sysroot=$SYSROOT_PATH -static -L$FUSE_PREFIX/lib"
 
           make -j$(nproc)
           make install
-
           echo "EXFAT_INSTALL=$PWD/../exfat-install" >> $GITHUB_ENV
 
       - name: Collect & strip binaries
         run: |
           set -e
-          BIN_DIR="dist/bin"
-          mkdir -p "$BIN_DIR"
-
-          for bin in \
-            mount.exfat-fuse \
-            mkfs.exfat \
-            fsck.exfat \
-            exfatlabel \
-            dumpexfat; do
-              SRC=$(find "$EXFAT_INSTALL" -name "$bin" -type f 2>/dev/null | head -1)
-              if [ -n "$SRC" ]; then
-                cp "$SRC" "$BIN_DIR/$bin"
-                "$STRIP_ANDROID" --strip-all "$BIN_DIR/$bin"
-                echo "✓ $bin ($(du -h "$BIN_DIR/$bin" | cut -f1))"
-              else
-                echo "⚠ $bin not found — skipping"
-              fi
+          mkdir -p dist/bin
+          for bin in mount.exfat-fuse mkfs.exfat fsck.exfat exfatlabel dumpexfat; do
+            SRC=$(find "$EXFAT_INSTALL" -name "$bin" -type f 2>/dev/null | head -1)
+            if [ -n "$SRC" ]; then
+              cp "$SRC" "dist/bin/$bin"
+              "$STRIP_CROSS" --strip-all "dist/bin/$bin"
+              echo "OK $bin  $(du -h "dist/bin/$bin" | cut -f1)"
+            else
+              echo "SKIP $bin not found"
+            fi
           done
-
-          ls -lh "$BIN_DIR/"
 
       - name: Package module zip
         run: |
@@ -158,23 +143,21 @@ jobs:
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
           VERSION="${TAG#v}"
 
-          MOD="module-staging"
-          cp -r module "$MOD"
+          cp -r module module-staging
+          mkdir -p module-staging/system/bin
+          cp dist/bin/* module-staging/system/bin/
+          chmod 755 module-staging/system/bin/*
 
-          mkdir -p "$MOD/system/bin"
-          cp dist/bin/* "$MOD/system/bin/"
-          chmod 755 "$MOD/system/bin/"*
+          sed -i "s/^version=.*/version=$TAG/"             module-staging/module.prop
+          sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module-staging/module.prop
 
-          sed -i "s/^version=.*/version=$TAG/" "$MOD/module.prop"
-          sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" "$MOD/module.prop"
-
-          cd "$MOD"
+          cd module-staging
           zip -r9 "../dist/exfat-module-${TAG}-arm64.zip" . \
             -x "*.git*" -x "__MACOSX" -x "*.DS_Store"
           cd ..
 
           echo "MODULE_ZIP=dist/exfat-module-${TAG}-arm64.zip" >> $GITHUB_ENV
-          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "TAG=$TAG"                                        >> $GITHUB_ENV
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -196,12 +179,29 @@ jobs:
           generate_release_notes: true
           body: |
             ## exFAT KernelSU/Magisk Module ${{ env.TAG }}
+
+            Fixes exFAT SD card support (64GB+) on GSI ROMs.
+
+            ### Files
+            | File | Description |
+            |------|-------------|
+            | `exfat-module-*-arm64.zip` | Full module (Magisk / KernelSU) |
+            | `mount.exfat-fuse` | FUSE mount binary |
+            | `mkfs.exfat` | Format utility |
+            | `fsck.exfat` | Filesystem checker |
+
+            ### Installation
+            1. Open **KernelSU** or **Magisk**
+            2. Install `exfat-module-*-arm64.zip`
+            3. Reboot
+
+            ### Requirements
             - Android 8.0+ (API 26+)
-            - KernelSU Magisk
-            - kernel 
+            - KernelSU or Magisk
+            - Kernel with FUSE support
 
             ---
-            Built with NDK ${{ env.NDK_VERSION }} • Target: arm64-v8a • API ${{ env.API_LEVEL }}
+            Built with NDK ${{ env.NDK_VERSION }} | arm64-v8a | API ${{ env.API_LEVEL }}
           files: |
             dist/*.zip
             dist/bin/mount.exfat-fuse
