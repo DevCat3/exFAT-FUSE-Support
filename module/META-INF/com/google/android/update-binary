@@ -1,5 +1,4 @@
 #!/sbin/sh
-l
 
 SKIPUNZIP=1
 
@@ -21,5 +20,4 @@ mkdir -p "$MODPATH"
 export MODPATH ZIPFILE
 . /tmp/exfat-install/customize.sh
 
-# cleanup
 rm -rf /tmp/exfat-install

@@ -16,6 +16,7 @@ env:
   NDK_URL: https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
   FUSE_VERSION: 2.9.9
   FUSE_URL: https://github.com/libfuse/libfuse/releases/download/fuse-2.9.9/fuse-2.9.9.tar.gz
+  EXFAT_URL: https://github.com/relan/exfat/archive/refs/tags/v1.4.0.tar.gz
   API_LEVEL: 21
   TARGET: aarch64-linux-android
 
@@ -39,8 +40,14 @@ jobs:
         run: |
           curl -fsSL "$NDK_URL" -o ndk.zip
           unzip -q ndk.zip
-          echo "NDK_ROOT=$PWD/android-ndk-$NDK_VERSION"                                          >> $GITHUB_ENV
-          echo "TOOLCHAIN=$PWD/android-ndk-$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64"  >> $GITHUB_ENV
+          echo "NDK_ROOT=$PWD/android-ndk-$NDK_VERSION"                                         >> $GITHUB_ENV
+          echo "TOOLCHAIN=$PWD/android-ndk-$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+
+      - name: Download exFAT source
+        run: |
+          curl -fsSL "$EXFAT_URL" -o exfat.tar.gz
+          tar -xzf exfat.tar.gz
+          mv exfat-1.4.0 exfat-master
 
       - name: Build libfuse static (arm64)
         run: |
@@ -54,8 +61,6 @@ jobs:
           tar -xzf fuse.tar.gz
           cd fuse-$FUSE_VERSION
 
-          # Patch: Android bionic does not support pthread cancellation.
-          # Stub out pthread_cancel and pthread_setcancelstate with no-ops.
           sed -i \
             -e 's/pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,  *NULL);/(void)0;/g' \
             -e 's/pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, *NULL);/(void)0;/g' \
@@ -66,7 +71,6 @@ jobs:
             -e 's/pthread_cancel(f->prune_thread);/(void)0;/g' \
             lib/fuse.c
 
-          # Use the existing configure script — do NOT run autoreconf on libfuse 2.9.9
           ./configure \
             --host="$TARGET" \
             --prefix="$PREFIX" \
@@ -86,13 +90,13 @@ jobs:
           make -j$(nproc)
           make install
 
-          echo "FUSE_CFLAGS=-I$PREFIX/include"          >> $GITHUB_ENV
+          echo "FUSE_CFLAGS=-I$PREFIX/include"           >> $GITHUB_ENV
           echo "FUSE_LIBS=-L$PREFIX/lib -lfuse -lpthread" >> $GITHUB_ENV
-          echo "FUSE_PREFIX=$PREFIX"                     >> $GITHUB_ENV
-          echo "CC_CROSS=$CC"                            >> $GITHUB_ENV
-          echo "AR_CROSS=$AR"                            >> $GITHUB_ENV
-          echo "STRIP_CROSS=$TOOLCHAIN/bin/llvm-strip"  >> $GITHUB_ENV
-          echo "SYSROOT_PATH=$SYSROOT"                  >> $GITHUB_ENV
+          echo "FUSE_PREFIX=$PREFIX"                      >> $GITHUB_ENV
+          echo "CC_CROSS=$CC"                             >> $GITHUB_ENV
+          echo "AR_CROSS=$AR"                             >> $GITHUB_ENV
+          echo "STRIP_CROSS=$TOOLCHAIN/bin/llvm-strip"   >> $GITHUB_ENV
+          echo "SYSROOT_PATH=$SYSROOT"                   >> $GITHUB_ENV
 
       - name: Build exFAT (arm64)
         run: |
@@ -101,7 +105,6 @@ jobs:
 
           autoreconf --install
 
-          # Fake pkg-config so autoconf resolves libfuse to our static build
           mkdir -p "$PWD/../fake-pc"
           cat > "$PWD/../fake-pc/pkg-config" << 'PKGEOF'
           #!/bin/bash

@@ -5,7 +5,6 @@ FUSE_BIN="$MODDIR/system/bin/mount.exfat-fuse"
 LOG="/data/local/tmp/exfat-module.log"
 MOUNTED_DEVS=""
 
-
 log() { echo "[$(date '+%H:%M:%S')] $*" >> "$LOG"; }
 
 wait_boot() {
@@ -54,7 +53,7 @@ mount_exfat() {
     vol_id=$(get_vol_id "$dev")
     local mnt_raw="/mnt/media_rw/$vol_id"
 
-    log "Found exFAT: $dev → $mnt_raw (ID: $vol_id)"
+    log "Found exFAT: $dev -> $mnt_raw (ID: $vol_id)"
 
     mkdir -p "$mnt_raw" 2>/dev/null
     umount -f "$mnt_raw" 2>/dev/null || true
@@ -70,7 +69,7 @@ mount_exfat() {
 
     local ret=$?
     if [ $ret -eq 0 ]; then
-        log "✓ Mounted $dev at $mnt_raw"
+        log "Mounted $dev at $mnt_raw"
         MOUNTED_DEVS="$MOUNTED_DEVS $dev"
 
         chown root:media_rw "$mnt_raw"
@@ -82,7 +81,7 @@ mount_exfat() {
             -d "file://$mnt_raw" \
             > /dev/null 2>&1 &
     else
-        log "✗ Failed to mount $dev (exit: $ret)"
+        log "Failed to mount $dev (exit: $ret)"
         rmdir "$mnt_raw" 2>/dev/null || true
     fi
 }
@@ -101,7 +100,7 @@ log "Module: $MODDIR"
 log "Binary: $FUSE_BIN"
 
 if [ ! -x "$FUSE_BIN" ]; then
-    log "ERROR: mount.exfat-fuse not found or not executable!"
+    log "ERROR: mount.exfat-fuse not found or not executable"
     exit 1
 fi
 
