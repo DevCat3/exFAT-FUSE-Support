@@ -1,0 +1,212 @@
+name: Build exFAT & Package Module
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  NDK_VERSION: r26d
+  NDK_URL: https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+  FUSE_VERSION: 2.9.9
+  FUSE_URL: https://github.com/libfuse/libfuse/releases/download/fuse-2.9.9/fuse-2.9.9.tar.gz
+  API_LEVEL: 21
+  ABI: arm64-v8a
+  TARGET: aarch64-linux-android
+
+jobs:
+  build:
+    name: Build for Android arm64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            autoconf automake libtool pkg-config \
+            curl unzip zip
+
+      - name: Download & setup NDK ${{ env.NDK_VERSION }}
+        run: |
+          echo "→ Downloading NDK..."
+          curl -fsSL "$NDK_URL" -o ndk.zip
+          unzip -q ndk.zip
+          echo "NDK_ROOT=$PWD/android-ndk-$NDK_VERSION" >> $GITHUB_ENV
+          echo "TOOLCHAIN=$PWD/android-ndk-$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+
+      - name: Build libfuse static (arm64)
+        run: |
+          set -e
+          CC="$TOOLCHAIN/bin/${TARGET}${API_LEVEL}-clang"
+          AR="$TOOLCHAIN/bin/llvm-ar"
+          STRIP="$TOOLCHAIN/bin/llvm-strip"
+          SYSROOT="$TOOLCHAIN/sysroot"
+
+          echo "→ Downloading libfuse $FUSE_VERSION..."
+          curl -fsSL "$FUSE_URL" -o fuse.tar.gz
+          tar -xzf fuse.tar.gz
+          cd fuse-$FUSE_VERSION
+
+          sed -i '/^SUBDIRS/s/util//' Makefile.am 2>/dev/null || true
+
+          autoreconf -fi
+
+          ./configure \
+            --host="$TARGET" \
+            --prefix="$PWD/../fuse-install" \
+            --disable-shared \
+            --enable-static \
+            --disable-util \
+            --disable-example \
+            CC="$CC" \
+            AR="$AR" \
+            CFLAGS="-D__ANDROID__ -D_FILE_OFFSET_BITS=64 -Os \
+                    --sysroot=$SYSROOT \
+                    -I$SYSROOT/usr/include \
+                    -I$SYSROOT/usr/include/aarch64-linux-android" \
+            LDFLAGS="--sysroot=$SYSROOT -static-libgcc"
+
+          make -j$(nproc) install
+
+          echo "FUSE_CFLAGS=-I$PWD/../fuse-install/include" >> $GITHUB_ENV
+          echo "FUSE_LIBS=-L$PWD/../fuse-install/lib -lfuse -lpthread" >> $GITHUB_ENV
+          echo "FUSE_INSTALL=$PWD/../fuse-install" >> $GITHUB_ENV
+          echo "CC_ANDROID=$CC" >> $GITHUB_ENV
+          echo "AR_ANDROID=$AR" >> $GITHUB_ENV
+          echo "STRIP_ANDROID=$STRIP" >> $GITHUB_ENV
+          echo "SYSROOT_ANDROID=$SYSROOT" >> $GITHUB_ENV
+
+      - name: Build exFAT (arm64)
+        run: |
+          set -e
+          cd exfat-master
+
+          autoreconf --install
+
+          mkdir -p "$PWD/../fake-pkgconfig"
+          cat > "$PWD/../fake-pkgconfig/pkg-config" << 'EOF'
+          #!/bin/bash
+          case "$*" in
+            *--cflags*fuse*) echo "$FUSE_CFLAGS" ;;
+            *--libs*fuse*)   echo "$FUSE_LIBS" ;;
+            *--exists*fuse3*) exit 1 ;;
+            *--exists*fuse*)  exit 0 ;;
+            *) pkg-config.real "$@" ;;
+          esac
+          EOF
+          chmod +x "$PWD/../fake-pkgconfig/pkg-config"
+          export PKG_CONFIG="$PWD/../fake-pkgconfig/pkg-config"
+
+          export FUSE2_CFLAGS="$FUSE_CFLAGS"
+          export FUSE2_LIBS="$FUSE_LIBS"
+
+          ./configure \
+            --host="$TARGET" \
+            --prefix="$PWD/../exfat-install" \
+            CC="$CC_ANDROID" \
+            AR="$AR_ANDROID" \
+            CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
+                    --sysroot=$SYSROOT_ANDROID \
+                    -I$SYSROOT_ANDROID/usr/include \
+                    -I$SYSROOT_ANDROID/usr/include/aarch64-linux-android \
+                    $FUSE_CFLAGS" \
+            LDFLAGS="--sysroot=$SYSROOT_ANDROID -static \
+                     -L$FUSE_INSTALL/lib"
+
+          make -j$(nproc)
+          make install
+
+          echo "EXFAT_INSTALL=$PWD/../exfat-install" >> $GITHUB_ENV
+
+      - name: Collect & strip binaries
+        run: |
+          set -e
+          BIN_DIR="dist/bin"
+          mkdir -p "$BIN_DIR"
+
+          for bin in \
+            mount.exfat-fuse \
+            mkfs.exfat \
+            fsck.exfat \
+            exfatlabel \
+            dumpexfat; do
+              SRC=$(find "$EXFAT_INSTALL" -name "$bin" -type f 2>/dev/null | head -1)
+              if [ -n "$SRC" ]; then
+                cp "$SRC" "$BIN_DIR/$bin"
+                "$STRIP_ANDROID" --strip-all "$BIN_DIR/$bin"
+                echo "✓ $bin ($(du -h "$BIN_DIR/$bin" | cut -f1))"
+              else
+                echo "⚠ $bin not found — skipping"
+              fi
+          done
+
+          ls -lh "$BIN_DIR/"
+
+      - name: Package module zip
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
+          VERSION="${TAG#v}"
+
+          MOD="module-staging"
+          cp -r module "$MOD"
+
+          mkdir -p "$MOD/system/bin"
+          cp dist/bin/* "$MOD/system/bin/"
+          chmod 755 "$MOD/system/bin/"*
+
+          sed -i "s/^version=.*/version=$TAG/" "$MOD/module.prop"
+          sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" "$MOD/module.prop"
+
+          cd "$MOD"
+          zip -r9 "../dist/exfat-module-${TAG}-arm64.zip" . \
+            -x "*.git*" -x "__MACOSX" -x "*.DS_Store"
+          cd ..
+
+          echo "MODULE_ZIP=dist/exfat-module-${TAG}-arm64.zip" >> $GITHUB_ENV
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: exfat-android-arm64
+          path: |
+            dist/bin/
+            dist/*.zip
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: "exFAT Module ${{ env.TAG }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## exFAT KernelSU/Magisk Module ${{ env.TAG }}
+            - Android 8.0+ (API 26+)
+            - KernelSU Magisk
+            - kernel 
+
+            ---
+            Built with NDK ${{ env.NDK_VERSION }} • Target: arm64-v8a • API ${{ env.API_LEVEL }}
+          files: |
+            dist/*.zip
+            dist/bin/mount.exfat-fuse
+            dist/bin/mkfs.exfat
+            dist/bin/fsck.exfat
+            dist/bin/exfatlabel
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
