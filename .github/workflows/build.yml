@@ -103,49 +103,54 @@ jobs:
 
       - name: Build exFAT (arm64)
         run: |
-          set -e
-          cd exfat-master
+           set -e
+           cd exfat-master
 
-          autoreconf --install
+           autoreconf --install
 
-          # Fake pkg-config wrapper so configure finds our static libfuse
-          mkdir -p "$PWD/../fake-pc"
-          cat > "$PWD/../fake-pc/pkg-config" << 'PKGEOF'
-          #!/bin/bash
+           # Fake pkg-config wrapper so configure finds our static libfuse
+           mkdir -p "$PWD/../fake-pc"
+           cat > "$PWD/../fake-pc/pkg-config" << 'PKGEOF'
+           #!/bin/bash
            case "$*" in
-          *--cflags*fuse3*) exit 1 ;;
-          *--exists*fuse3*) exit 1 ;;
-          *--cflags*fuse*)  echo "$FUSE_CFLAGS" ;;
-          *--libs*fuse*)    echo "$FUSE_LIBS" ;;
-          *--exists*fuse*)  exit 0 ;;
-          *)                /usr/bin/pkg-config "$@" ;;
-          esac
-          PKGEOF
-          chmod +x "$PWD/../fake-pc/pkg-config"
-          export PKG_CONFIG="$PWD/../fake-pc/pkg-config"
-          export FUSE2_CFLAGS="$FUSE_CFLAGS"
-          export FUSE2_LIBS="$FUSE_LIBS"
+           *--cflags*fuse3*) exit 1 ;;
+           *--exists*fuse3*) exit 1 ;;
+           *--cflags*fuse*)  echo "$FUSE_CFLAGS" ;;
+           *--libs*fuse*)    echo "$FUSE_LIBS" ;;
+           *--exists*fuse*)  exit 0 ;;
+           *)                /usr/bin/pkg-config "$@" ;;
+           esac
+           PKGEOF
+           chmod +x "$PWD/../fake-pc/pkg-config"
+           export PKG_CONFIG="$PWD/../fake-pc/pkg-config"
+           export FUSE2_CFLAGS="$FUSE_CFLAGS"
+           export FUSE2_LIBS="$FUSE_LIBS"
 
-          # FIX: CC must contain the compiler binary path ONLY.
-          # --sysroot must go in CFLAGS/LDFLAGS, never in CC.
-          # Embedding --sysroot in CC causes autoconf's compiler
-          # sanity check to fail with "cannot create executables".
-          ./configure \
-            --host="$TARGET" \
-            --prefix="$PWD/../exfat-install" \
-            CC="$CC_CROSS" \
-            AR="$AR_CROSS" \
-            CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
-                    --sysroot=$SYSROOT_PATH \
-                    -I$SYSROOT_PATH/usr/include \
-                    -I$SYSROOT_PATH/usr/include/aarch64-linux-android \
-                    $FUSE_CFLAGS" \
-            LDFLAGS="--sysroot=$SYSROOT_PATH -static -L$FUSE_PREFIX/lib -llog"
+           # Export cross-compilation variables from previous step
+           export CC="$CC_CROSS"
+           export AR="$AR_CROSS"
+           export SYSROOT="$SYSROOT_PATH"
+           export TOOLCHAIN="$TOOLCHAIN"
 
-          make -j$(nproc)
-          make install
-          echo "EXFAT_INSTALL=$PWD/../exfat-install" >> $GITHUB_ENV
+           # FIX: CC must contain the compiler binary path ONLY.
+           # --sysroot must go in CFLAGS/LDFLAGS, never in CC.
+           # Embedding --sysroot in CC causes autoconf's compiler
+           # sanity check to fail with "cannot create executables".
+           ./configure \
+             --host="$TARGET" \
+             --prefix="$PWD/../exfat-install" \
+             CC="$CC" \
+             AR="$AR" \
+             CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
+                     --sysroot=$SYSROOT \
+                     -I$SYSROOT/usr/include \
+                     -I$SYSROOT/usr/include/aarch64-linux-android \
+                     $FUSE_CFLAGS" \
+             LDFLAGS="--sysroot=$SYSROOT -static -L$FUSE_PREFIX/lib -llog"
 
+           make -j$(nproc)
+           make install
+           echo "EXFAT_INSTALL=$PWD/../exfat-install" >> $GITHUB_ENV
       - name: Collect & strip binaries
         run: |
           set -e
