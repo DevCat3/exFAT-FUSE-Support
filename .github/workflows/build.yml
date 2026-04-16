@@ -61,6 +61,8 @@ jobs:
           tar -xzf fuse.tar.gz
           cd fuse-$FUSE_VERSION
 
+          # Patch: Android bionic does not implement pthread cancellation.
+          # Replace calls with no-ops to allow compilation against NDK.
           sed -i \
             -e 's/pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,  *NULL);/(void)0;/g' \
             -e 's/pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, *NULL);/(void)0;/g' \
@@ -71,6 +73,7 @@ jobs:
             -e 's/pthread_cancel(f->prune_thread);/(void)0;/g' \
             lib/fuse.c
 
+          # Use the pre-existing configure -- do NOT run autoreconf on libfuse 2.9.9
           ./configure \
             --host="$TARGET" \
             --prefix="$PREFIX" \
@@ -90,7 +93,7 @@ jobs:
           make -j$(nproc)
           make install
 
-          echo "FUSE_CFLAGS=-I$PREFIX/include"           >> $GITHUB_ENV
+          echo "FUSE_CFLAGS=-I$PREFIX/include"            >> $GITHUB_ENV
           echo "FUSE_LIBS=-L$PREFIX/lib -lfuse -lpthread" >> $GITHUB_ENV
           echo "FUSE_PREFIX=$PREFIX"                      >> $GITHUB_ENV
           echo "CC_CROSS=$CC"                             >> $GITHUB_ENV
@@ -105,33 +108,39 @@ jobs:
 
           autoreconf --install
 
+          # Fake pkg-config wrapper so configure finds our static libfuse
           mkdir -p "$PWD/../fake-pc"
           cat > "$PWD/../fake-pc/pkg-config" << 'PKGEOF'
-          #!/bin/bash
-          case "$*" in
-            *--cflags*fuse3*) exit 1 ;;
-            *--exists*fuse3*) exit 1 ;;
-            *--cflags*fuse*)  echo "$FUSE_CFLAGS" ;;
-            *--libs*fuse*)    echo "$FUSE_LIBS" ;;
-            *--exists*fuse*)  exit 0 ;;
-            *)                /usr/bin/pkg-config "$@" ;;
-          esac
-          PKGEOF
+#!/bin/bash
+case "$*" in
+  *--cflags*fuse3*) exit 1 ;;
+  *--exists*fuse3*) exit 1 ;;
+  *--cflags*fuse*)  echo "$FUSE_CFLAGS" ;;
+  *--libs*fuse*)    echo "$FUSE_LIBS" ;;
+  *--exists*fuse*)  exit 0 ;;
+  *)                /usr/bin/pkg-config "$@" ;;
+esac
+PKGEOF
           chmod +x "$PWD/../fake-pc/pkg-config"
           export PKG_CONFIG="$PWD/../fake-pc/pkg-config"
           export FUSE2_CFLAGS="$FUSE_CFLAGS"
           export FUSE2_LIBS="$FUSE_LIBS"
 
+          # FIX: CC must contain the compiler binary path ONLY.
+          # --sysroot must go in CFLAGS/LDFLAGS, never in CC.
+          # Embedding --sysroot in CC causes autoconf's compiler
+          # sanity check to fail with "cannot create executables".
           ./configure \
             --host="$TARGET" \
             --prefix="$PWD/../exfat-install" \
-            CC="$CC_CROSS --sysroot=$SYSROOT_PATH" \
+            CC="$CC_CROSS" \
             AR="$AR_CROSS" \
             CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
+                    --sysroot=$SYSROOT_PATH \
                     -I$SYSROOT_PATH/usr/include \
                     -I$SYSROOT_PATH/usr/include/aarch64-linux-android \
                     $FUSE_CFLAGS" \
-            LDFLAGS="-static -L$FUSE_PREFIX/lib -llog"
+            LDFLAGS="--sysroot=$SYSROOT_PATH -static -L$FUSE_PREFIX/lib"
 
           make -j$(nproc)
           make install
@@ -146,7 +155,7 @@ jobs:
             if [ -n "$SRC" ]; then
               cp "$SRC" "dist/bin/$bin"
               "$STRIP_CROSS" --strip-all "dist/bin/$bin"
-              echo "OK $bin  $(du -h "dist/bin/$bin" | cut -f1)"
+              echo "OK  $bin  $(du -h "dist/bin/$bin" | cut -f1)"
             else
               echo "SKIP $bin not found"
             fi
@@ -156,14 +165,13 @@ jobs:
         run: |
           set -e
           TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
-          VERSION="${TAG#v}"
 
           cp -r module module-staging
           mkdir -p module-staging/system/bin
           cp dist/bin/* module-staging/system/bin/
           chmod 755 module-staging/system/bin/*
 
-          sed -i "s/^version=.*/version=$TAG/"             module-staging/module.prop
+          sed -i "s/^version=.*/version=$TAG/"                    module-staging/module.prop
           sed -i "s/^versionCode=.*/versionCode=$(date +%Y%m%d)/" module-staging/module.prop
 
           cd module-staging
