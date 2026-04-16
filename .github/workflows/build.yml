@@ -131,26 +131,23 @@ jobs:
            export AR="$AR_CROSS"
            export SYSROOT="$SYSROOT_PATH"
            export TOOLCHAIN="$TOOLCHAIN"
+           
+           # Export CFLAGS and LDFLAGS so configure tests can use them
+           export CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
+                    --sysroot=$SYSROOT \
+                    -I$SYSROOT/usr/include \
+                    -I$SYSROOT/usr/include/aarch64-linux-android \
+                    $FUSE_CFLAGS"
+           export LDFLAGS="--sysroot=$SYSROOT -static -L$FUSE_PREFIX/lib -lfuse -lpthread"
 
-           # FIX: CC must contain the compiler binary path ONLY.
-           # --sysroot must go in CFLAGS/LDFLAGS, never in CC.
-           # Embedding --sysroot in CC causes autoconf's compiler
-           # sanity check to fail with "cannot create executables".
            ./configure \
              --host="$TARGET" \
-             --prefix="$PWD/../exfat-install" \
-             CC="$CC" \
-             AR="$AR" \
-             CFLAGS="-Os -D_FILE_OFFSET_BITS=64 \
-                     --sysroot=$SYSROOT \
-                     -I$SYSROOT/usr/include \
-                     -I$SYSROOT/usr/include/aarch64-linux-android \
-                     $FUSE_CFLAGS" \
-             LDFLAGS="--sysroot=$SYSROOT -static -L$FUSE_PREFIX/lib -lfuse -lpthread"
+             --prefix="$PWD/../exfat-install"
 
            make -j$(nproc)
            make install
            echo "EXFAT_INSTALL=$PWD/../exfat-install" >> $GITHUB_ENV
+           
       - name: Collect & strip binaries
         run: |
           set -e
