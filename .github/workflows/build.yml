@@ -111,16 +111,16 @@ jobs:
           # Fake pkg-config wrapper so configure finds our static libfuse
           mkdir -p "$PWD/../fake-pc"
           cat > "$PWD/../fake-pc/pkg-config" << 'PKGEOF'
-#!/bin/bash
-case "$*" in
-  *--cflags*fuse3*) exit 1 ;;
-  *--exists*fuse3*) exit 1 ;;
-  *--cflags*fuse*)  echo "$FUSE_CFLAGS" ;;
-  *--libs*fuse*)    echo "$FUSE_LIBS" ;;
-  *--exists*fuse*)  exit 0 ;;
-  *)                /usr/bin/pkg-config "$@" ;;
-esac
-PKGEOF
+          #!/bin/bash
+           case "$*" in
+          *--cflags*fuse3*) exit 1 ;;
+          *--exists*fuse3*) exit 1 ;;
+          *--cflags*fuse*)  echo "$FUSE_CFLAGS" ;;
+          *--libs*fuse*)    echo "$FUSE_LIBS" ;;
+          *--exists*fuse*)  exit 0 ;;
+          *)                /usr/bin/pkg-config "$@" ;;
+          esac
+          PKGEOF
           chmod +x "$PWD/../fake-pc/pkg-config"
           export PKG_CONFIG="$PWD/../fake-pc/pkg-config"
           export FUSE2_CFLAGS="$FUSE_CFLAGS"
