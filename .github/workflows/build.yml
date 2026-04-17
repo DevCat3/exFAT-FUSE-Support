@@ -118,23 +118,23 @@ jobs:
           # Extend the CC wrapper to also expose FUSE headers.
           # Keeping --sysroot out of CFLAGS prevents autoconf conftest failures.
           cat > "$WRAPPERS/cc" << WEOF
-#!/bin/sh
-exec "$CLANG" --sysroot="$SYSROOT_PATH" "\$@"
-WEOF
-          chmod +x "$WRAPPERS/cc"
+          #!/bin/sh
 
+          exec "$CLANG" --sysroot="$SYSROOT_PATH" "\$@"
+          WEOF
+          chmod +x "$WRAPPERS/cc"
           # Fake pkg-config so configure resolves fuse to our static build.
           cat > "$WRAPPERS/pkg-config" << 'WEOF'
-#!/bin/sh
-case "$*" in
-  *fuse3*) exit 1 ;;
-  *--cflags*) echo "$FUSE_CFLAGS" ;;
-  *--libs*)   echo "-L$FUSE_PREFIX/lib -lfuse" ;;
-  *--exists*) exit 0 ;;
-  *)          /usr/bin/pkg-config "$@" ;;
-esac
-WEOF
-          chmod +x "$WRAPPERS/pkg-config"
+          #!/bin/sh
+          case "$*" in
+            *fuse3*) exit 1 ;;
+            *--cflags*) echo "$FUSE_CFLAGS" ;;
+            *--libs*)   echo "-L$FUSE_PREFIX/lib -lfuse" ;;
+            *--exists*) exit 0 ;;
+            *)          /usr/bin/pkg-config "$@" ;;
+          esac
+          WEOF
+                    chmod +x "$WRAPPERS/pkg-config"
 
           export PKG_CONFIG="$WRAPPERS/pkg-config"
           export FUSE2_CFLAGS="$FUSE_CFLAGS"
