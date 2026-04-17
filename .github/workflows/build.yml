@@ -76,10 +76,10 @@ jobs:
           # --sysroot appearing in CFLAGS (which confuses some tests).
           mkdir -p "$PWD/../wrappers"
           cat > "$PWD/../wrappers/cc" << WEOF
-#!/bin/sh
-exec "$CLANG" --sysroot="$SYSROOT" "\$@"
-WEOF
-          chmod +x "$PWD/../wrappers/cc"
+            #!/bin/sh
+            exec "$CLANG" --sysroot="$SYSROOT" "\$@"
+            WEOF
+            chmod +x "$PWD/../wrappers/cc"
 
           # Use the pre-existing configure — do NOT run autoreconf on libfuse 2.9.9
           ./configure \
